@@ -126,7 +126,68 @@ function plan(cfg,ideal){
 // ---------- persistence: stored in this browser, on this device ----------
 function localLoad(){try{var s=localStorage.getItem(KEY);return s?JSON.parse(s):null;}catch(e){return null;}}
 function localSave(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
-function save(){S.updated=Date.now();localSave();}
+
+// ---------- account sync (Firebase: Google sign-in + Firestore) ----------
+var CFG={apiKey:"AIzaSyDeJvechQpEbTtLJry8A5lwXWch1PsLLTs",authDomain:"lift-log-50384.firebaseapp.com",projectId:"lift-log-50384",storageBucket:"lift-log-50384.firebasestorage.app",messagingSenderId:"64016188516",appId:"1:64016188516:web:b8868dffdb89472b518b71"};
+var fb=null,user=null,syncState='local',syncMsg='',authMsg='',dirty=false,pushT=null;
+function withTimeout(p,ms){return Promise.race([p,new Promise(function(_,rej){setTimeout(function(){rej({code:'timeout'});},ms);})]);}
+function statusText(){
+  if(!user)return syncState==='unavailable'?'Sync unavailable right now. Saved on this device.':'Not signed in. Saved on this device only.';
+  if(syncState==='synced')return 'Synced to your account';
+  if(syncState==='offline')return 'Changes waiting to sync';
+  if(syncState==='error')return 'Sync problem: '+syncMsg;
+  return 'Syncing…';
+}
+function paintStatus(){['stat','acctStat'].forEach(function(id){var e=document.getElementById(id);if(e)e.textContent=statusText();});}
+function fail(e){var c=(e&&e.code)||'unknown';if(c==='timeout'||c==='unavailable'){syncState='offline';}else{syncState='error';syncMsg=c;}}
+async function push(){
+  if(!user||!fb)return;
+  try{
+    var c=clone(S);c.active=null;c.history=c.history.slice(0,500);
+    await withTimeout(fb.F.setDoc(fb.F.doc(fb.db,'users',user.uid),{json:JSON.stringify(c),updated:S.updated||Date.now()}),8000);
+    dirty=false;syncState='synced';
+  }catch(e){dirty=true;fail(e);}
+  paintStatus();
+}
+async function pull(){
+  if(!user||!fb)return;
+  try{
+    var snap=await withTimeout(fb.F.getDoc(fb.F.doc(fb.db,'users',user.uid)),8000);
+    if(snap.exists()){
+      var d=snap.data(),ru=d.updated||0;
+      if(ru>(S.updated||0)){
+        var remote=fix(JSON.parse(d.json));
+        if(remote&&!S.active){remote.active=null;remote.updated=ru;S=remote;localSave();render();}
+        syncState='synced';
+      }else if((S.updated||0)>ru){await push();return;}
+      else syncState='synced';
+    }else{await push();return;}
+  }catch(e){fail(e);}
+  paintStatus();
+}
+function save(){
+  S.updated=Date.now();localSave();
+  if(user&&fb){dirty=true;syncState='syncing';paintStatus();clearTimeout(pushT);pushT=setTimeout(push,1500);}
+}
+async function initFirebase(){
+  try{
+    var base='https://www.gstatic.com/firebasejs/10.14.1/';
+    var A=await import(base+'firebase-app.js'),Au=await import(base+'firebase-auth.js'),F=await import(base+'firebase-firestore.js');
+    var app=A.initializeApp(CFG);
+    fb={Au:Au,F:F,auth:Au.getAuth(app),db:F.getFirestore(app)};
+    Au.onAuthStateChanged(fb.auth,function(u){
+      user=u;syncState=u?'syncing':'local';authMsg='';paintStatus();
+      if(tab==='backup')render();
+      if(u)pull();
+    });
+  }catch(e){syncState='unavailable';paintStatus();}
+}
+async function signIn(){
+  if(!fb){authMsg='Sign-in is not available right now. Check your connection and reload.';render();return;}
+  try{await fb.Au.signInWithPopup(fb.auth,new fb.Au.GoogleAuthProvider());}
+  catch(e){var c=(e&&e.code)||'failed';authMsg=c==='auth/popup-closed-by-user'||c==='auth/cancelled-popup-request'?'':'Sign-in failed ('+c+').';render();}
+}
+async function signOutNow(){try{await fb.Au.signOut(fb.auth);}catch(e){}}
 function fix(o){ // fill any missing fields so older/odd data cannot break the page
   if(!o||o.v!==2||!Array.isArray(o.lifts)||!Array.isArray(o.bars)||!Array.isArray(o.plates)||!Array.isArray(o.days))return null;
   o.history=Array.isArray(o.history)?o.history:[];o.active=o.active||null;o.rest=o.rest||180;
@@ -134,7 +195,7 @@ function fix(o){ // fill any missing fields so older/odd data cannot break the p
   if(!o.days.some(function(d){return d.id===o.next;}))o.next=o.days[0]?o.days[0].id:'';
   return o;
 }
-function boot(){S=fix(localLoad())||clone(DEF);render();}
+function boot(){S=fix(localLoad())||clone(DEF);render();initFirebase();}
 
 // ---------- workout logic ----------
 function buildSlots(cfg,base,reps){
@@ -219,7 +280,7 @@ function summary(l){
 function vToday(){
   var h='';
   if(!S.confirmed)h+='<div class="note">Before you start, check <b>Gear</b> (your bar and plates) and <b>Template</b> (lifts, sets, weights). The values there are placeholders.<br><button class="sm" style="margin-top:8px" data-act="confirm">All set up</button></div>';
-  if(S.history.length>0&&(!S.lastBackup||Date.now()-S.lastBackup>30*864e5))h+='<div class="note">You haven\'t backed up lately. Your data lives only on this device, so a quick backup on the <b>Backup</b> tab protects your history.</div>';
+  if(S.history.length>0&&(!S.lastBackup||Date.now()-S.lastBackup>30*864e5))h+='<div class="note">You haven\'t backed up lately. A quick backup on the <b>Account</b> tab protects your history.</div>';
   if(S.active){
     var a=S.active;
     h+='<h1>'+esc(a.dayName)+'</h1><div class="sub">Tap a set when done. Tap again to drop a rep, and again to clear it.</div>';
@@ -337,8 +398,17 @@ function vGear(){
   return h;
 }
 function vBackup(){
-  var h='<h1>Backup</h1><div class="sub">Everything is saved automatically in this browser, on this device. It stays when you close the page. Clearing your browser data erases it, so keep a backup.</div>';
-  h+='<h2>Back up</h2><button class="pri" data-act="download">Download backup file</button><div style="height:8px"></div><button data-act="copyexp" style="width:100%">Copy backup text</button>';
+  var h='<h1>Account</h1>';
+  if(user){
+    h+='<div class="card"><div class="name">'+esc(user.displayName||'Signed in')+'</div><div class="sub">'+esc(user.email||'')+'</div><div class="sub" id="acctStat" style="margin-top:6px"></div>'
+      +'<div class="g2"><button data-act="syncnow">Sync now</button><button class="danger" data-act="signout">Sign out</button></div></div>'
+      +'<div class="sub">Your data syncs to your account, so any device you sign in on shows the same thing. Signing out keeps a copy on this device.</div>';
+  }else{
+    h+='<div class="card"><div class="sub">Sign in to keep your data safe in your account and use the same data on any device. Without signing in, it only lives on this device.</div><div style="height:10px"></div><button class="pri" data-act="signin">Sign in with Google</button>'
+      +(authMsg?'<div class="no" style="margin-top:8px;font-size:14px">'+esc(authMsg)+'</div>':'')+'<div class="sub" id="acctStat" style="margin-top:8px"></div></div>';
+  }
+  h+='<h2>Backup</h2><div class="sub">A backup file is your safety net, whether or not you sign in. Keep one now and then.</div>';
+  h+='<div style="height:10px"></div><button class="pri" data-act="download">Download backup file</button><div style="height:8px"></div><button data-act="copyexp" style="width:100%">Copy backup text</button>';
   h+='<div class="sub" id="bkmsg" style="margin-top:8px">'+(S.lastBackup?'Last backup: '+esc(new Date(S.lastBackup).toLocaleDateString('en-AU',{day:'numeric',month:'short'})):'No backup yet.')+'</div>';
   h+='<textarea id="exp" readonly style="margin-top:8px">'+esc(JSON.stringify(S))+'</textarea>';
   h+='<h2>Restore</h2><label>From a backup file</label><input id="impfile" type="file" accept=".json,.txt,application/json,text/plain"><div style="height:10px"></div><label>Or paste backup text</label><textarea id="imp" placeholder="Paste backup text here"></textarea><div style="height:8px"></div><button data-act="import" style="width:100%">Replace my data with this</button><div id="impmsg" class="sub" style="margin-top:8px"></div>';
@@ -347,8 +417,8 @@ function vBackup(){
 function render(){
   var v=tab==='today'?vToday():tab==='history'?vHistory():tab==='template'?vTemplate():tab==='gear'?vGear():vBackup();
   var ae=document.activeElement;
-  document.getElementById('app').innerHTML=v;
-  var tabs=[['today','Today'],['history','History'],['template','Template'],['gear','Gear'],['backup','Backup']];
+  document.getElementById('app').innerHTML=v+'<div class="status" id="stat"></div>';paintStatus();
+  var tabs=[['today','Today'],['history','History'],['template','Template'],['gear','Gear'],['backup','Account']];
   document.getElementById('tabs').innerHTML=tabs.map(function(t){return '<button class="'+(tab===t[0]?'on':'')+'" data-tab="'+t[0]+'">'+t[1]+'</button>';}).join('');
 }
 
@@ -384,6 +454,9 @@ document.addEventListener('click',function(ev){
   else if(act==='delplate'){if(!sure())return;S.plates.splice(i,1);save();render();}
   else if(act==='copyexp'){copyFrom('exp',b);markBackup();}
   else if(act==='download')downloadBackup(b);
+  else if(act==='signin')signIn();
+  else if(act==='signout')signOutNow();
+  else if(act==='syncnow'){syncState='syncing';paintStatus();dirty?push():pull();}
   else if(act==='import')doImport();
 });
 function markBackup(){S.lastBackup=Date.now();save();}
@@ -435,7 +508,8 @@ document.addEventListener('change',function(ev){
   if(o==='plate')S.plates.sort(function(a,b){return b.w-a.w;});
   save();render();
 });
-document.addEventListener('visibilitychange',function(){if(document.hidden)localSave();});
+document.addEventListener('visibilitychange',function(){if(document.hidden)localSave();else if(user)pull();});
+window.addEventListener('online',function(){if(user)dirty?push():pull();});
 
 boot();
 try{
