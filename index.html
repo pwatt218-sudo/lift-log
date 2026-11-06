@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lift Log</title>
+<meta name="theme-color" content="#0f1115">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+
+<style>
+:root{--bg:#0f1115;--card:#181b22;--card2:#20242d;--line:#2a2f3a;--text:#eef0f4;--mute:#8b93a3;--acc:#4ade80;--accd:#14532d;--bad:#f87171;--warn:#fbbf24}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,system-ui,Segoe UI,Roboto,sans-serif}
+body{padding:env(safe-area-inset-top) 0 calc(76px + env(safe-area-inset-bottom))}
+.wrap{max-width:560px;margin:0 auto;padding:14px}
+h1{font-size:20px;margin:6px 0 2px}
+h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);margin:22px 0 8px;font-weight:600}
+.sub{color:var(--mute);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
+.row{display:flex;align-items:center;gap:10px}
+.sp{justify-content:space-between}
+.name{font-weight:650;font-size:17px}
+.wt{font-size:26px;font-weight:700;white-space:nowrap}
+.wt small{font-size:14px;color:var(--mute);font-weight:500}
+.plates{color:var(--mute);font-size:13px;margin-top:2px}
+button{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px 14px;cursor:pointer}
+button:active{transform:scale(.97)}
+button.pri{background:var(--acc);color:#062b12;border-color:var(--acc);font-weight:700;width:100%;padding:14px;font-size:17px}
+button.ghost{background:transparent}
+button.danger{color:var(--bad)}
+button.sm{padding:6px 10px;font-size:14px;border-radius:10px}
+.sets{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.set{width:54px;height:54px;border-radius:50%;padding:0;font-size:18px;font-weight:700;background:var(--card2);color:var(--mute);flex:none}
+.set.done{background:var(--acc);color:#062b12;border-color:var(--acc)}
+.set.part{background:var(--warn);color:#2b1d00;border-color:var(--warn)}
+.set.zero{background:var(--bad);color:#2b0000;border-color:var(--bad)}
+.slot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+.slot.drop{padding-left:16px}
+.slot:first-of-type{border-top:0}
+.tabs{position:fixed;left:0;right:0;bottom:0;display:flex;background:#12151b;border-top:1px solid var(--line);padding:6px 4px calc(6px + env(safe-area-inset-bottom));z-index:5}
+.tabs button{flex:1;background:transparent;border:0;color:var(--mute);padding:10px 2px;font-size:13px}
+.tabs button.on{color:var(--acc);font-weight:700}
+input,textarea,select{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:9px 10px;width:100%}
+select{appearance:auto}
+label{font-size:12px;color:var(--mute);display:block;margin-bottom:3px}
+.g2,.g3,.g4{display:grid;gap:8px;margin-top:10px}
+.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr 1fr}.g4{grid-template-columns:repeat(4,1fr)}
+.chips{display:flex;gap:6px;margin-top:10px;align-items:center;flex-wrap:wrap}
+.chip{padding:5px 12px;border-radius:999px;font-size:14px}
+.chip.on{background:var(--accd);border-color:var(--acc);color:var(--acc)}
+.rest{position:fixed;left:12px;right:12px;bottom:calc(66px + env(safe-area-inset-bottom));background:var(--accd);border:1px solid var(--acc);border-radius:14px;padding:10px 14px;display:none;align-items:center;justify-content:space-between;z-index:6}
+.rest b{font-size:20px}
+.note{background:#2b2410;border:1px solid #5b4a14;color:#f3dd9a;border-radius:12px;padding:10px 12px;font-size:14px;margin:10px 0}
+.hist .ln{display:flex;justify-content:space-between;gap:8px;font-size:14px;padding:3px 0;color:var(--mute)}
+.hist .ln b{color:var(--text);font-weight:600}
+.ok{color:var(--acc)} .no{color:var(--bad)}
+textarea{min-height:96px;font:12px/1.3 ui-monospace,Menlo,monospace;word-break:break-all}
+.status{font-size:12px;color:var(--mute);text-align:center;margin-top:18px}
+.mv{display:flex;gap:4px}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<div class="rest" id="rest"><span>Rest <b id="restT">0:00</b></span><button class="sm" data-act="skiprest">Skip</button></div>
+<nav class="tabs" id="tabs"></nav>
+
+<script>
+(function(){
+'use strict';
+var KEY='liftlog.v2';
+function mkLift(id,name,w,inc,sets,reps){return {id:id,name:name,weight:w,bar:'b1',sets:sets,reps:reps,prog:'weight',inc:inc,repsMin:reps,repsMax:reps+3,failsMax:3,deload:10,fails:0};}
+var DEF={v:2,rest:180,confirmed:false,updated:0,
+  bars:[{id:'b1',name:'Barbell',weight:6.25}],
+  plates:[{w:20,n:2},{w:10,n:2},{w:5,n:2},{w:2.5,n:2},{w:1.25,n:2}],
+  lifts:[mkLift('sq','Squat',60,2.5,3,5),mkLift('bp','Bench Press',40,2.5,3,5),mkLift('row','Barbell Row',40,2.5,3,5),mkLift('ohp','Overhead Press',30,2.5,3,5),mkLift('dl','Deadlift',80,5,1,5)],
+  days:[{id:'d1',name:'Workout A',lifts:['sq','bp','row']},{id:'d2',name:'Workout B',lifts:['sq','ohp','dl']}],
+  next:'d1',history:[],active:null};
+var S=null,tab='today',saveT=null,restEnd=0,cache={};
+
+function clone(o){return JSON.parse(JSON.stringify(o));}
+function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function fmt(n){return String(Math.round(n*100)/100);}
+function r25(x){return Math.round(x*4)/4;}
+function lift(id){return S.lifts.filter(function(l){return l.id===id;})[0];}
+function dayOf(id){return S.days.filter(function(d){return d.id===id;})[0]||S.days[0];}
+function barOf(cfg){return S.bars.filter(function(b){return b.id===cfg.bar;})[0]||S.bars[0]||{id:'',name:'Bar',weight:0};}
+
+// ---------- equipment: every loadable weight ----------
+function loadMap(barW){
+  var key=barW+'|'+S.plates.map(function(p){return p.w+'x'+p.n;}).join(',');
+  if(cache[key])return cache[key];
+  var types=S.plates.filter(function(p){return p.w>0&&Math.floor(p.n/2)>0;}).map(function(p){return {w:p.w,k:Math.floor(p.n/2)};}).sort(function(a,b){return b.w-a.w;});
+  var dp={0:[]};
+  types.forEach(function(t){
+    var nd=Object.assign({},dp);
+    Object.keys(dp).forEach(function(k){
+      var base=dp[k],s=+k;
+      for(var j=1;j<=t.k;j++){
+        var ns=s+Math.round(t.w*100)*j,combo=base.concat(new Array(j).fill(t.w));
+        if(!nd[ns]||nd[ns].length>combo.length)nd[ns]=combo;
+      }
+    });
+    dp=nd;
+  });
+  var list=Object.keys(dp).map(function(k){return {total:Math.round((barW+2*(+k)/100)*100)/100,combo:dp[k]};}).sort(function(a,b){return a.total-b.total;});
+  cache={};cache[key]=list;
+  return list;
+}
+function snap(cfg,w){
+  var list=loadMap(barOf(cfg).weight),lo=0,hi=list.length-1;
+  while(lo<hi){var mid=(lo+hi)>>1;if(list[mid].total<w)lo=mid+1;else hi=mid;}
+  var best=list[lo];
+  if(lo>0&&Math.abs(list[lo-1].total-w)<=Math.abs(best.total-w))best=list[lo-1];
+  return best;
+}
+function plan(cfg,ideal){
+  var r=snap(cfg,ideal);
+  var t=r.combo.length?'Each side: '+r.combo.join(' + '):'Bar only';
+  t+=' · bar '+fmt(barOf(cfg).weight);
+  if(Math.abs(r.total-ideal)>0.01)t+=' · wanted '+fmt(ideal);
+  return t;
+}
+
+// ---------- persistence: stored in this browser, on this device ----------
+function localLoad(){try{var s=localStorage.getItem(KEY);return s?JSON.parse(s):null;}catch(e){return null;}}
+function localSave(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
+function save(){S.updated=Date.now();localSave();}
+function fix(o){ // fill any missing fields so older/odd data cannot break the page
+  if(!o||o.v!==2||!Array.isArray(o.lifts)||!Array.isArray(o.bars)||!Array.isArray(o.plates)||!Array.isArray(o.days))return null;
+  o.history=Array.isArray(o.history)?o.history:[];o.active=o.active||null;o.rest=o.rest||180;
+  o.lifts.forEach(function(l){var d=mkLift(l.id,l.name,l.weight,l.inc||2.5,l.sets||3,l.reps||5);Object.keys(d).forEach(function(k){if(l[k]===undefined)l[k]=d[k];});});
+  if(!o.days.some(function(d){return d.id===o.next;}))o.next=o.days[0]?o.days[0].id:'';
+  return o;
+}
+function boot(){S=fix(localLoad())||clone(DEF);render();}
+
+// ---------- workout logic ----------
+function buildSlots(cfg,base,reps){
+  var out=[],n=Math.max(1,cfg.sets|0);
+  for(var s=0;s<n;s++){
+    out.push({w:snap(cfg,base).total,ideal:base,reps:reps,done:null});
+  }
+  return out;
+}
+function startWorkout(did){
+  var day=dayOf(did);if(!day)return;
+  var entries=day.lifts.map(lift).filter(Boolean).map(function(l){
+    var cfg=clone(l);delete cfg.name;
+    return {id:l.id,name:l.name,cfg:cfg,base:l.weight,reps:l.reps,slots:buildSlots(cfg,l.weight,l.reps)};
+  });
+  if(!entries.length)return;
+  S.active={day:day.id,dayName:day.name,start:Date.now(),entries:entries};
+  save();render();
+}
+function tapSet(ei,si){
+  var e=S.active.entries[ei],s=e.slots[si],v=s.done;
+  if(v===null)v=s.reps;else if(v>0)v=v-1;else v=null;
+  s.done=v;
+  if(v!==null){restEnd=Date.now()+S.rest*1000;showRest();}
+  save();render();
+}
+function nudge(ei,dir){
+  var e=S.active.entries[ei],step=e.cfg.inc>0?e.cfg.inc:2.5;
+  e.base=Math.max(0,r25(e.base+dir*step));
+  var fresh=buildSlots(e.cfg,e.base,e.reps);
+  fresh.forEach(function(s,i){if(e.slots[i])s.done=e.slots[i].done;});
+  e.slots=fresh;save();render();
+}
+function finishWorkout(){
+  var a=S.active,rec={date:new Date().toISOString(),day:a.dayName,entries:[]};
+  a.entries.forEach(function(e){
+    if(!e.slots.some(function(s){return s.done!==null;}))return;
+    var ok=e.slots.every(function(s){return s.done!==null&&s.done>=s.reps;}),l=lift(e.id);
+    rec.entries.push({name:e.name,base:e.base,ok:ok,slots:e.slots.map(function(s){return {w:s.w,reps:s.reps,done:s.done||0};})});
+    if(!l)return;
+    l.weight=e.base;
+    if(l.prog==='none')return;
+    if(ok){
+      l.fails=0;
+      if(l.prog==='double'){
+        if(l.reps<l.repsMax)l.reps=l.reps+1;
+        else{l.weight=r25(e.base+l.inc);l.reps=l.repsMin;}
+      }else l.weight=r25(e.base+l.inc);
+    }else{
+      l.fails=(l.fails||0)+1;
+      if(l.failsMax>0&&l.fails>=l.failsMax){l.weight=r25(e.base*(1-l.deload/100));l.fails=0;if(l.prog==='double')l.reps=l.repsMin;}
+    }
+  });
+  if(rec.entries.length)S.history.unshift(rec);
+  var i=S.days.map(function(d){return d.id;}).indexOf(a.day);
+  S.next=S.days[(i+1)%S.days.length].id;
+  S.active=null;restEnd=0;hideRest();
+  save();tab='history';render();
+}
+
+// ---------- rest timer ----------
+function showRest(){document.getElementById('rest').style.display='flex';tickRest();}
+function hideRest(){document.getElementById('rest').style.display='none';}
+function tickRest(){
+  if(!restEnd){hideRest();return;}
+  var s=Math.max(0,Math.round((restEnd-Date.now())/1000));
+  document.getElementById('restT').textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+  if(s<=0){restEnd=0;setTimeout(hideRest,1500);}
+}
+setInterval(tickRest,500);
+
+// ---------- views ----------
+function spark(vals){
+  if(vals.length<2)return '';
+  var w=110,h=26,mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals),rg=(mx-mn)||1;
+  var pts=vals.map(function(v,i){return (i/(vals.length-1)*w).toFixed(1)+','+(h-2-((v-mn)/rg)*(h-4)).toFixed(1);}).join(' ');
+  return '<svg width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'"><polyline fill="none" stroke="#4ade80" stroke-width="2" points="'+pts+'"/></svg>';
+}
+function summary(l){
+  return l.sets+' × '+l.reps;
+}
+function vToday(){
+  var h='';
+  if(!S.confirmed)h+='<div class="note">Before you start, check <b>Gear</b> (your bar and plates) and <b>Template</b> (lifts, sets, weights). The values there are placeholders.<br><button class="sm" style="margin-top:8px" data-act="confirm">All set up</button></div>';
+  if(S.history.length>0&&(!S.lastBackup||Date.now()-S.lastBackup>30*864e5))h+='<div class="note">You haven\'t backed up lately. Your data lives only on this device, so a quick backup on the <b>Backup</b> tab protects your history.</div>';
+  if(S.active){
+    var a=S.active;
+    h+='<h1>'+esc(a.dayName)+'</h1><div class="sub">Tap a set when done. Tap again to drop a rep, and again to clear it.</div>';
+    a.entries.forEach(function(e,ei){
+      h+='<div class="card"><div class="row sp"><div><div class="name">'+esc(e.name)+'</div><div class="sub">'+esc(summary(Object.assign({},e.cfg,{reps:e.reps})))+'</div></div>'
+        +'<div class="row"><button class="sm" data-act="wdown" data-i="'+ei+'">−</button><div class="wt">'+fmt(e.base)+'<small>kg</small></div><button class="sm" data-act="wup" data-i="'+ei+'">+</button></div></div>';
+      h+='<div class="plates">'+esc(plan(e.cfg,e.slots[0].ideal))+'</div><div class="sets">';
+      e.slots.forEach(function(s,si){h+=setBtn(s,ei,si);});
+      h+='</div>';
+      h+='</div>';
+    });
+    h+='<button class="pri" data-act="finish">Finish workout</button><div style="height:10px"></div><button class="ghost danger" style="width:100%" data-act="cancel">Cancel workout</button>';
+  }else{
+    var day=dayOf(S.next);
+    h+='<h1>Today</h1>';
+    h+='<div class="chips">'+S.days.map(function(d){return '<button class="chip'+(S.next===d.id?' on':'')+'" data-act="day" data-id="'+esc(d.id)+'">'+esc(d.name)+'</button>';}).join('')+'</div>';
+    if(!day||!day.lifts.length)h+='<div class="card sub">No lifts in this workout. Add some on the Template tab.</div>';
+    else day.lifts.map(lift).filter(Boolean).forEach(function(l){
+      h+='<div class="card"><div class="row sp"><div><div class="name">'+esc(l.name)+'</div><div class="sub">'+esc(summary(l))+(l.fails?' · missed '+l.fails+'/'+l.failsMax:'')+'</div></div><div class="wt">'+fmt(snap(l,l.weight).total)+'<small>kg</small></div></div><div class="plates">'+esc(plan(l,l.weight))+'</div></div>';
+    });
+    h+='<div style="height:6px"></div><button class="pri" data-act="start">Start '+esc(day?day.name:'')+'</button>';
+  }
+  return h;
+}
+function setBtn(s,ei,si){
+  var c='set',t;
+  if(s.done===null)t=String(s.reps);else{t=String(s.done);c+=s.done>=s.reps?' done':(s.done===0?' zero':' part');}
+  return '<button class="'+c+'" data-act="set" data-i="'+ei+'" data-s="'+si+'">'+t+'</button>';
+}
+function slotLine(slots){
+  var parts=[],cur=null;
+  slots.forEach(function(s){
+    if(cur&&cur.w===s.w){cur.d.push(s.done);}else{cur={w:s.w,d:[s.done]};parts.push(cur);}
+  });
+  return parts.map(function(p){return fmt(p.w)+'kg: '+p.d.join('/');}).join(' → ');
+}
+function vHistory(){
+  var h='<h1>History</h1>';
+  if(!S.history.length)return h+'<div class="card sub">Nothing logged yet. Finish a workout and it shows up here.</div>';
+  var by={};
+  S.history.slice().reverse().forEach(function(r){r.entries.forEach(function(e){(by[e.name]=by[e.name]||[]).push(e.base);});});
+  h+='<h2>Progress</h2><div class="card">';
+  Object.keys(by).forEach(function(n){
+    var v=by[n];
+    h+='<div class="row sp" style="padding:4px 0"><div><b>'+esc(n)+'</b><div class="sub">'+fmt(v[0])+' → '+fmt(v[v.length-1])+' kg</div></div>'+spark(v)+'</div>';
+  });
+  h+='</div><h2>Workouts</h2>';
+  S.history.slice(0,60).forEach(function(r){
+    var d=new Date(r.date);
+    h+='<div class="card hist"><div class="row sp"><b>'+esc(r.day||'Workout')+'</b><span class="sub">'+esc(d.toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short'}))+'</span></div>';
+    r.entries.forEach(function(e){h+='<div class="ln"><b>'+esc(e.name)+'</b><span class="'+(e.ok?'ok':'no')+'">'+esc(slotLine(e.slots))+'</span></div>';});
+    h+='</div>';
+  });
+  return h;
+}
+// field helpers: o = object kind, k = key, f = path
+function fi(o,k,f,label,val,opt){
+  opt=opt||{};
+  return '<div><label>'+label+'</label><input data-o="'+o+'" data-k="'+esc(k)+'" data-f="'+f+'" data-t="num"'+(opt.int?' data-int="1"':'')+(opt.min!=null?' data-min="'+opt.min+'"':'')+' type="number" inputmode="decimal" step="any" value="'+esc(fmt(val))+'"></div>';
+}
+function fs(o,k,f,label,val,opts){
+  return '<div><label>'+label+'</label><select data-o="'+o+'" data-k="'+esc(k)+'" data-f="'+f+'" data-t="str">'+opts.map(function(x){return '<option value="'+x[0]+'"'+(x[0]===val?' selected':'')+'>'+x[1]+'</option>';}).join('')+'</select></div>';
+}
+function ft(o,k,f,label,val){
+  return '<div><label>'+label+'</label><input data-o="'+o+'" data-k="'+esc(k)+'" data-f="'+f+'" data-t="str" value="'+esc(val)+'"></div>';
+}
+function vTemplate(){
+  var h='<h1>Template</h1><div class="sub">Build your workouts here. Changes save as you go.</div>';
+  h+='<h2>Workouts</h2>';
+  S.days.forEach(function(d){
+    h+='<div class="card"><div class="row"><div style="flex:1">'+ft('day',d.id,'name','Name',d.name)+'</div><button class="sm danger ghost" style="margin-top:16px" data-act="delday" data-id="'+esc(d.id)+'">Delete</button></div></div>';
+  });
+  h+='<button data-act="addday" style="width:100%">+ Add a workout</button>';
+  h+='<h2>Lifts</h2>';
+  S.lifts.forEach(function(l,li){
+    var id=l.id,dbl=l.prog==='double';
+    h+='<div class="card"><div class="row"><div style="flex:1">'+ft('lift',id,'name','Lift',l.name)+'</div>'
+      +'<div class="mv" style="margin-top:16px"><button class="sm" data-act="up" data-id="'+esc(id)+'">▲</button><button class="sm" data-act="dn" data-id="'+esc(id)+'">▼</button></div></div>';
+    h+='<div class="g2">'+fi('lift',id,'weight','Working weight (kg)',l.weight,{min:0})
+      +fs('lift',id,'bar','Bar',l.bar,S.bars.map(function(b){return [b.id,esc(b.name)+' ('+fmt(b.weight)+')'];}))+'</div>';
+    h+='<div class="g2">'+fi('lift',id,'sets','Sets',l.sets,{int:1,min:1})
+      +(dbl?'<div><label>Reps now (auto)</label><input value="'+l.reps+'" disabled></div>':fi('lift',id,'reps','Reps',l.reps,{int:1,min:1}))+'</div>';
+    h+='<h2 style="margin:16px 0 0">Progression</h2>';
+    h+='<div class="g2">'+fs('lift',id,'prog','Type',l.prog,[['weight','Add weight each success'],['double','Add reps, then weight'],['none','None (I choose)']])
+      +(l.prog==='none'?'<div></div>':fi('lift',id,'inc',dbl?'Add kg when reps maxed':'Add kg per success',l.inc,{min:0}))+'</div>';
+    if(dbl)h+='<div class="g2">'+fi('lift',id,'repsMin','Min reps',l.repsMin,{int:1,min:1})+fi('lift',id,'repsMax','Max reps',l.repsMax,{int:1,min:1})+'</div>';
+    if(l.prog!=='none')h+='<div class="g2">'+fi('lift',id,'failsMax','Deload after N misses (0 = off)',l.failsMax,{int:1,min:0})+fi('lift',id,'deload','Deload by %',l.deload,{min:0})+'</div>';
+    h+='<div class="chips"><span class="sub">In:</span>'+S.days.map(function(d){return '<button class="chip'+(d.lifts.indexOf(id)>-1?' on':'')+'" data-act="dayset" data-d="'+esc(d.id)+'" data-id="'+esc(id)+'">'+esc(d.name)+'</button>';}).join('')
+      +'<span style="flex:1"></span><button class="sm danger ghost" data-act="del" data-id="'+esc(id)+'">Delete</button></div></div>';
+  });
+  h+='<button data-act="add" style="width:100%">+ Add a lift</button>';
+  return h;
+}
+function vGear(){
+  var h='<h1>Gear</h1><div class="sub">Tell it what you own and it will only ever ask you to load what you can actually build.</div>';
+  h+='<h2>Bars</h2>';
+  S.bars.forEach(function(b){
+    h+='<div class="card"><div class="g2" style="margin-top:0">'+ft('bar',b.id,'name','Name',b.name)+fi('bar',b.id,'weight','Weight (kg)',b.weight,{min:0})+'</div>'
+      +(S.bars.length>1?'<div class="chips"><span style="flex:1"></span><button class="sm danger ghost" data-act="delbar" data-id="'+esc(b.id)+'">Delete</button></div>':'')+'</div>';
+  });
+  h+='<button data-act="addbar" style="width:100%">+ Add a bar</button>';
+  h+='<h2>Plates</h2><div class="sub">Count is the total number of that plate you own. 2 = one pair. A spare odd plate is ignored.</div>';
+  S.plates.forEach(function(p,i){
+    h+='<div class="card"><div class="g2" style="margin-top:0">'+fi('plate',i,'w','Plate (kg)',p.w,{min:0})+fi('plate',i,'n','How many',p.n,{int:1,min:0})+'</div>'
+      +'<div class="chips"><span style="flex:1"></span><button class="sm danger ghost" data-act="delplate" data-i="'+i+'">Delete</button></div></div>';
+  });
+  h+='<button data-act="addplate" style="width:100%">+ Add a plate</button>';
+  h+='<h2>What you can load</h2><div class="card">';
+  S.bars.forEach(function(b){
+    var list=loadMap(b.weight),jump=null;
+    for(var i=1;i<list.length;i++){var df=list[i].total-list[i-1].total;if(jump===null||df<jump)jump=df;}
+    h+='<div style="padding:3px 0"><b>'+esc(b.name)+'</b><div class="sub">'+fmt(list[0].total)+' to '+fmt(list[list.length-1].total)+' kg'+(jump!==null?', smallest step '+fmt(jump)+' kg':'')+'</div></div>';
+  });
+  h+='</div><h2>Rest timer</h2><div class="card">'+fi('g','','rest','Seconds between sets',S.rest,{int:1,min:0})+'</div>';
+  return h;
+}
+function vBackup(){
+  var h='<h1>Backup</h1><div class="sub">Everything is saved automatically in this browser, on this device. It stays when you close the page. Clearing your browser data erases it, so keep a backup.</div>';
+  h+='<h2>Back up</h2><button class="pri" data-act="download">Download backup file</button><div style="height:8px"></div><button data-act="copyexp" style="width:100%">Copy backup text</button>';
+  h+='<div class="sub" id="bkmsg" style="margin-top:8px">'+(S.lastBackup?'Last backup: '+esc(new Date(S.lastBackup).toLocaleDateString('en-AU',{day:'numeric',month:'short'})):'No backup yet.')+'</div>';
+  h+='<textarea id="exp" readonly style="margin-top:8px">'+esc(JSON.stringify(S))+'</textarea>';
+  h+='<h2>Restore</h2><label>From a backup file</label><input id="impfile" type="file" accept=".json,.txt,application/json,text/plain"><div style="height:10px"></div><label>Or paste backup text</label><textarea id="imp" placeholder="Paste backup text here"></textarea><div style="height:8px"></div><button data-act="import" style="width:100%">Replace my data with this</button><div id="impmsg" class="sub" style="margin-top:8px"></div>';
+  return h;
+}
+function render(){
+  var v=tab==='today'?vToday():tab==='history'?vHistory():tab==='template'?vTemplate():tab==='gear'?vGear():vBackup();
+  var ae=document.activeElement;
+  document.getElementById('app').innerHTML=v;
+  var tabs=[['today','Today'],['history','History'],['template','Template'],['gear','Gear'],['backup','Backup']];
+  document.getElementById('tabs').innerHTML=tabs.map(function(t){return '<button class="'+(tab===t[0]?'on':'')+'" data-tab="'+t[0]+'">'+t[1]+'</button>';}).join('');
+}
+
+// ---------- events ----------
+function copyFrom(id,b){
+  var t=document.getElementById(id);t.focus();t.select();
+  try{navigator.clipboard.writeText(t.value).then(function(){b.textContent='Copied';},function(){b.textContent='Select the text and copy it';});}catch(x){b.textContent='Select the text and copy it';}
+}
+document.addEventListener('click',function(ev){
+  var tb=ev.target.closest('[data-tab]');
+  if(tb){tab=tb.getAttribute('data-tab');render();window.scrollTo(0,0);return;}
+  var b=ev.target.closest('[data-act]');if(!b)return;
+  var act=b.getAttribute('data-act'),i=+b.getAttribute('data-i'),id=b.getAttribute('data-id'),d=b.getAttribute('data-d');
+  function sure(label){if(b.getAttribute('data-sure')!=='1'){b.setAttribute('data-sure','1');b.textContent=label||'Tap again to delete';return false;}return true;}
+  if(act==='start')startWorkout(S.next);
+  else if(act==='day'){S.next=id;save();render();}
+  else if(act==='set')tapSet(i,+b.getAttribute('data-s'));
+  else if(act==='wup')nudge(i,1);
+  else if(act==='wdown')nudge(i,-1);
+  else if(act==='finish')finishWorkout();
+  else if(act==='cancel'){if(!sure('Tap again to cancel'))return;S.active=null;restEnd=0;hideRest();save();render();}
+  else if(act==='skiprest'){restEnd=0;hideRest();}
+  else if(act==='confirm'){S.confirmed=true;save();render();}
+  else if(act==='dayset'){var day=dayOf(d),k=day.lifts.indexOf(id);if(k>-1)day.lifts.splice(k,1);else day.lifts.push(id);save();render();}
+  else if(act==='up'||act==='dn'){var j=S.lifts.map(function(l){return l.id;}).indexOf(id),t=act==='up'?j-1:j+1;if(t>=0&&t<S.lifts.length){var x=S.lifts[j];S.lifts[j]=S.lifts[t];S.lifts[t]=x;save();render();}}
+  else if(act==='del'){if(!sure())return;S.lifts=S.lifts.filter(function(l){return l.id!==id;});S.days.forEach(function(dd){dd.lifts=dd.lifts.filter(function(y){return y!==id;});});save();render();}
+  else if(act==='add'){var nl=mkLift('l'+Date.now(),'New lift',20,2.5,3,5);nl.bar=S.bars[0].id;S.lifts.push(nl);save();render();window.scrollTo(0,document.body.scrollHeight);}
+  else if(act==='addday'){S.days.push({id:'d'+Date.now(),name:'Workout '+(S.days.length+1),lifts:[]});save();render();}
+  else if(act==='delday'){if(S.days.length<2)return;if(!sure())return;S.days=S.days.filter(function(x){return x.id!==id;});if(!dayOf(S.next)||S.next===id)S.next=S.days[0].id;save();render();}
+  else if(act==='addbar'){S.bars.push({id:'b'+Date.now(),name:'Bar '+(S.bars.length+1),weight:20});save();render();}
+  else if(act==='delbar'){if(!sure())return;S.bars=S.bars.filter(function(x){return x.id!==id;});save();render();}
+  else if(act==='addplate'){S.plates.push({w:1,n:2});save();render();}
+  else if(act==='delplate'){if(!sure())return;S.plates.splice(i,1);save();render();}
+  else if(act==='copyexp'){copyFrom('exp',b);markBackup();}
+  else if(act==='download')downloadBackup(b);
+  else if(act==='import')doImport();
+});
+function markBackup(){S.lastBackup=Date.now();save();}
+function downloadBackup(b){
+  try{
+    var d=new Date(),name='lift-log-backup-'+d.toISOString().slice(0,10)+'.json';
+    var url=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));
+    var a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},4000);
+    markBackup();b.textContent='Downloaded';
+  }catch(e){b.textContent='Download blocked: use Copy backup text';}
+}
+function doImport(){
+  var m=document.getElementById('impmsg'),o=null;
+  try{o=fix(JSON.parse(document.getElementById('imp').value.trim()));}catch(e){o=null;}
+  if(!o){m.textContent="That doesn't look like a valid backup.";return;}
+  o.active=null;S=o;S.confirmed=true;save();render();
+  document.getElementById('impmsg').textContent='Restored.';
+}
+document.addEventListener('change',function(ev){
+  var t=ev.target;
+  if(t.id==='impfile'){
+    var f=t.files&&t.files[0];if(!f)return;
+    var rd=new FileReader();rd.onload=function(){document.getElementById('imp').value=String(rd.result||'');doImport();};rd.readAsText(f);return;
+  }
+  var o=t.getAttribute('data-o');if(!o)return;
+  var k=t.getAttribute('data-k'),path=t.getAttribute('data-f').split('.'),obj;
+  if(o==='lift')obj=lift(k);
+  else if(o==='day')obj=S.days.filter(function(x){return x.id===k;})[0];
+  else if(o==='bar')obj=S.bars.filter(function(x){return x.id===k;})[0];
+  else if(o==='plate')obj=S.plates[+k];
+  else obj=S;
+  if(!obj)return;
+  var val;
+  if(t.getAttribute('data-t')==='num'){
+    val=parseFloat(t.value);
+    if(!isFinite(val)){render();return;}
+    var mn=t.getAttribute('data-min');if(mn!==null&&val<+mn)val=+mn;
+    if(t.getAttribute('data-int'))val=Math.round(val);
+  }else{val=t.value;if(path[0]==='name'&&!val.trim())val='Untitled';}
+  for(var i=0;i<path.length-1;i++)obj=obj[path[i]];
+  obj[path[path.length-1]]=val;
+  if(o==='lift'&&path[0]==='prog'&&val==='double'){
+    var l=lift(k);l.repsMin=l.reps;l.repsMax=Math.max(l.repsMax,l.reps+1);
+  }
+  if(o==='lift'&&(path[0]==='repsMin'||path[0]==='repsMax')){
+    var l2=lift(k);if(l2.repsMax<l2.repsMin)l2.repsMax=l2.repsMin;l2.reps=Math.min(Math.max(l2.reps,l2.repsMin),l2.repsMax);
+  }
+  if(o==='plate')S.plates.sort(function(a,b){return b.w-a.w;});
+  save();render();
+});
+document.addEventListener('visibilitychange',function(){if(document.hidden)localSave();});
+
+boot();
+try{
+  if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
+  if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js').catch(function(){});
+}catch(e){}
+})();
+</script>
+</body>
+</html>
