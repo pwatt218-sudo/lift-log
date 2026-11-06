@@ -70,7 +70,7 @@ textarea{min-height:96px;font:12px/1.3 ui-monospace,Menlo,monospace;word-break:b
 (function(){
 'use strict';
 var KEY='liftlog.v2';
-function mkLift(id,name,w,inc,sets,reps){return {id:id,name:name,weight:w,bar:'b1',sets:sets,reps:reps,prog:'weight',inc:inc,repsMin:reps,repsMax:reps+3,failsMax:3,deload:10,fails:0};}
+function mkLift(id,name,w,inc,sets,reps){return {id:id,name:name,weight:w,bar:'b1',scheme:'straight',sets:sets,reps:reps,drops:{n:2,by:20,unit:'pct',reps:8},prog:'weight',inc:inc,repsMin:reps,repsMax:reps+3,failsMax:3,deload:10,fails:0};}
 var DEF={v:2,rest:180,confirmed:false,updated:0,
   bars:[{id:'b1',name:'Barbell',weight:6.25}],
   plates:[{w:20,n:2},{w:10,n:2},{w:5,n:2},{w:2.5,n:2},{w:1.25,n:2}],
@@ -85,13 +85,16 @@ function fmt(n){return String(Math.round(n*100)/100);}
 function r25(x){return Math.round(x*4)/4;}
 function lift(id){return S.lifts.filter(function(l){return l.id===id;})[0];}
 function dayOf(id){return S.days.filter(function(d){return d.id===id;})[0]||S.days[0];}
-function barOf(cfg){return S.bars.filter(function(b){return b.id===cfg.bar;})[0]||S.bars[0]||{id:'',name:'Bar',weight:0};}
+var NOBAR={id:'none',name:'No bar',weight:0,none:true};
+function barOf(cfg){if(cfg.bar==='none')return NOBAR;return S.bars.filter(function(b){return b.id===cfg.bar;})[0]||S.bars[0]||{id:'',name:'Bar',weight:0};}
+function wtHtml(cfg,w){var n=barOf(cfg).none;return n&&w<=0?'BW':(n?'+':'')+fmt(w)+'<small>kg</small>';}
+function wlab(cfg,w){var n=barOf(cfg).none;return n&&w<=0?'Bodyweight':(n?'+':'')+fmt(w)+' kg';}
 
 // ---------- equipment: every loadable weight ----------
-function loadMap(barW){
-  var key=barW+'|'+S.plates.map(function(p){return p.w+'x'+p.n;}).join(',');
+function loadMap(barW,none){
+  var key=(none?'N':barW)+'|'+S.plates.map(function(p){return p.w+'x'+p.n;}).join(',');
   if(cache[key])return cache[key];
-  var types=S.plates.filter(function(p){return p.w>0&&Math.floor(p.n/2)>0;}).map(function(p){return {w:p.w,k:Math.floor(p.n/2)};}).sort(function(a,b){return b.w-a.w;});
+  var types=S.plates.filter(function(p){return p.w>0&&(none?p.n:Math.floor(p.n/2))>0;}).map(function(p){return {w:p.w,k:none?p.n:Math.floor(p.n/2)};}).sort(function(a,b){return b.w-a.w;});
   var dp={0:[]};
   types.forEach(function(t){
     var nd=Object.assign({},dp);
@@ -104,21 +107,22 @@ function loadMap(barW){
     });
     dp=nd;
   });
-  var list=Object.keys(dp).map(function(k){return {total:Math.round((barW+2*(+k)/100)*100)/100,combo:dp[k]};}).sort(function(a,b){return a.total-b.total;});
-  cache={};cache[key]=list;
+  var list=Object.keys(dp).map(function(k){return {total:Math.round((barW+(none?1:2)*(+k)/100)*100)/100,combo:dp[k]};}).sort(function(a,b){return a.total-b.total;});
+  if(Object.keys(cache).length>12)cache={};
+  cache[key]=list;
   return list;
 }
 function snap(cfg,w){
-  var list=loadMap(barOf(cfg).weight),lo=0,hi=list.length-1;
+  var b=barOf(cfg),list=loadMap(b.weight,!!b.none),lo=0,hi=list.length-1;
   while(lo<hi){var mid=(lo+hi)>>1;if(list[mid].total<w)lo=mid+1;else hi=mid;}
   var best=list[lo];
   if(lo>0&&Math.abs(list[lo-1].total-w)<=Math.abs(best.total-w))best=list[lo-1];
   return best;
 }
 function plan(cfg,ideal){
-  var r=snap(cfg,ideal);
-  var t=r.combo.length?'Each side: '+r.combo.join(' + '):'Bar only';
-  t+=' · bar '+fmt(barOf(cfg).weight);
+  var b=barOf(cfg),r=snap(cfg,ideal),t;
+  if(b.none)t=r.total<=0?'Bodyweight':'Add: '+r.combo.join(' + ')+' kg (belt or vest)';
+  else t=(r.combo.length?'Each side: '+r.combo.join(' + '):'Bar only')+' · bar '+fmt(b.weight);
   if(Math.abs(r.total-ideal)>0.01)t+=' · wanted '+fmt(ideal);
   return t;
 }
@@ -201,7 +205,15 @@ function boot(){S=fix(localLoad())||clone(DEF);render();initFirebase();}
 function buildSlots(cfg,base,reps){
   var out=[],n=Math.max(1,cfg.sets|0);
   for(var s=0;s<n;s++){
-    out.push({w:snap(cfg,base).total,ideal:base,reps:reps,done:null});
+    out.push({w:snap(cfg,base).total,ideal:base,reps:reps,drop:false,lab:'Set '+(s+1),done:null});
+    if(cfg.scheme==='drop'&&cfg.drops){
+      var cur=base;
+      for(var d=0;d<(cfg.drops.n|0);d++){
+        cur=cfg.drops.unit==='kg'?cur-cfg.drops.by:cur*(1-cfg.drops.by/100);
+        cur=Math.max(0,cur);
+        out.push({w:snap(cfg,cur).total,ideal:cur,reps:cfg.drops.reps,drop:true,lab:'Drop '+(d+1),done:null});
+      }
+    }
   }
   return out;
 }
@@ -219,7 +231,8 @@ function tapSet(ei,si){
   var e=S.active.entries[ei],s=e.slots[si],v=s.done;
   if(v===null)v=s.reps;else if(v>0)v=v-1;else v=null;
   s.done=v;
-  if(v!==null){restEnd=Date.now()+S.rest*1000;showRest();}
+  var nx=e.slots[si+1];
+  if(v!==null&&!(nx&&nx.drop)){restEnd=Date.now()+S.rest*1000;showRest();}
   save();render();
 }
 function nudge(ei,dir){
@@ -234,7 +247,7 @@ function finishWorkout(){
   a.entries.forEach(function(e){
     if(!e.slots.some(function(s){return s.done!==null;}))return;
     var ok=e.slots.every(function(s){return s.done!==null&&s.done>=s.reps;}),l=lift(e.id);
-    rec.entries.push({name:e.name,base:e.base,ok:ok,slots:e.slots.map(function(s){return {w:s.w,reps:s.reps,done:s.done||0};})});
+    rec.entries.push({name:e.name,none:!!barOf(e.cfg).none,base:e.base,ok:ok,slots:e.slots.map(function(s){return {w:s.w,reps:s.reps,done:s.done||0};})});
     if(!l)return;
     l.weight=e.base;
     if(l.prog==='none')return;
@@ -275,7 +288,7 @@ function spark(vals){
   return '<svg width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'"><polyline fill="none" stroke="#4ade80" stroke-width="2" points="'+pts+'"/></svg>';
 }
 function summary(l){
-  return l.sets+' × '+l.reps;
+  return l.scheme==='drop'&&l.drops?l.sets+' × '+l.reps+' + '+l.drops.n+' drop'+(l.drops.n===1?'':'s')+' × '+l.drops.reps:l.sets+' × '+l.reps;
 }
 function vToday(){
   var h='';
@@ -286,10 +299,18 @@ function vToday(){
     h+='<h1>'+esc(a.dayName)+'</h1><div class="sub">Tap a set when done. Tap again to drop a rep, and again to clear it.</div>';
     a.entries.forEach(function(e,ei){
       h+='<div class="card"><div class="row sp"><div><div class="name">'+esc(e.name)+'</div><div class="sub">'+esc(summary(Object.assign({},e.cfg,{reps:e.reps})))+'</div></div>'
-        +'<div class="row"><button class="sm" data-act="wdown" data-i="'+ei+'">−</button><div class="wt">'+fmt(e.base)+'<small>kg</small></div><button class="sm" data-act="wup" data-i="'+ei+'">+</button></div></div>';
-      h+='<div class="plates">'+esc(plan(e.cfg,e.slots[0].ideal))+'</div><div class="sets">';
-      e.slots.forEach(function(s,si){h+=setBtn(s,ei,si);});
-      h+='</div>';
+        +'<div class="row"><button class="sm" data-act="wdown" data-i="'+ei+'">−</button><div class="wt">'+wtHtml(e.cfg,e.base)+'</div><button class="sm" data-act="wup" data-i="'+ei+'">+</button></div></div>';
+      if(e.cfg.scheme!=='drop'){
+        h+='<div class="plates">'+esc(plan(e.cfg,e.slots[0].ideal))+'</div><div class="sets">';
+        e.slots.forEach(function(s,si){h+=setBtn(s,ei,si);});
+        h+='</div>';
+      }else{
+        h+='<div style="margin-top:8px">';
+        e.slots.forEach(function(s,si){
+          h+='<div class="slot'+(s.drop?' drop':'')+'"><div><b>'+esc(s.lab)+'</b> <span class="sub">'+esc(wlab(e.cfg,s.w))+' × '+s.reps+'</span><div class="plates">'+esc(plan(e.cfg,s.ideal))+'</div></div>'+setBtn(s,ei,si)+'</div>';
+        });
+        h+='</div>';
+      }
       h+='</div>';
     });
     h+='<button class="pri" data-act="finish">Finish workout</button><div style="height:10px"></div><button class="ghost danger" style="width:100%" data-act="cancel">Cancel workout</button>';
@@ -299,7 +320,7 @@ function vToday(){
     h+='<div class="chips">'+S.days.map(function(d){return '<button class="chip'+(S.next===d.id?' on':'')+'" data-act="day" data-id="'+esc(d.id)+'">'+esc(d.name)+'</button>';}).join('')+'</div>';
     if(!day||!day.lifts.length)h+='<div class="card sub">No lifts in this workout. Add some on the Template tab.</div>';
     else day.lifts.map(lift).filter(Boolean).forEach(function(l){
-      h+='<div class="card"><div class="row sp"><div><div class="name">'+esc(l.name)+'</div><div class="sub">'+esc(summary(l))+(l.fails?' · missed '+l.fails+'/'+l.failsMax:'')+'</div></div><div class="wt">'+fmt(snap(l,l.weight).total)+'<small>kg</small></div></div><div class="plates">'+esc(plan(l,l.weight))+'</div></div>';
+      h+='<div class="card"><div class="row sp"><div><div class="name">'+esc(l.name)+'</div><div class="sub">'+esc(summary(l))+(l.fails?' · missed '+l.fails+'/'+l.failsMax:'')+'</div></div><div class="wt">'+wtHtml(l,snap(l,l.weight).total)+'</div></div><div class="plates">'+esc(plan(l,l.weight))+'</div></div>';
     });
     h+='<div style="height:6px"></div><button class="pri" data-act="start">Start '+esc(day?day.name:'')+'</button>';
   }
@@ -310,12 +331,12 @@ function setBtn(s,ei,si){
   if(s.done===null)t=String(s.reps);else{t=String(s.done);c+=s.done>=s.reps?' done':(s.done===0?' zero':' part');}
   return '<button class="'+c+'" data-act="set" data-i="'+ei+'" data-s="'+si+'">'+t+'</button>';
 }
-function slotLine(slots){
+function slotLine(slots,none){
   var parts=[],cur=null;
   slots.forEach(function(s){
     if(cur&&cur.w===s.w){cur.d.push(s.done);}else{cur={w:s.w,d:[s.done]};parts.push(cur);}
   });
-  return parts.map(function(p){return fmt(p.w)+'kg: '+p.d.join('/');}).join(' → ');
+  return parts.map(function(p){return (none?(p.w<=0?'BW':'+'+fmt(p.w)+'kg'):fmt(p.w)+'kg')+': '+p.d.join('/');}).join(' → ');
 }
 function vHistory(){
   var h='<h1>History</h1>';
@@ -331,7 +352,7 @@ function vHistory(){
   S.history.slice(0,60).forEach(function(r){
     var d=new Date(r.date);
     h+='<div class="card hist"><div class="row sp"><b>'+esc(r.day||'Workout')+'</b><span class="sub">'+esc(d.toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short'}))+'</span></div>';
-    r.entries.forEach(function(e){h+='<div class="ln"><b>'+esc(e.name)+'</b><span class="'+(e.ok?'ok':'no')+'">'+esc(slotLine(e.slots))+'</span></div>';});
+    r.entries.forEach(function(e){h+='<div class="ln"><b>'+esc(e.name)+'</b><span class="'+(e.ok?'ok':'no')+'">'+esc(slotLine(e.slots,e.none))+'</span></div>';});
     h+='</div>';
   });
   return h;
@@ -359,10 +380,17 @@ function vTemplate(){
     var id=l.id,dbl=l.prog==='double';
     h+='<div class="card"><div class="row"><div style="flex:1">'+ft('lift',id,'name','Lift',l.name)+'</div>'
       +'<div class="mv" style="margin-top:16px"><button class="sm" data-act="up" data-id="'+esc(id)+'">▲</button><button class="sm" data-act="dn" data-id="'+esc(id)+'">▼</button></div></div>';
-    h+='<div class="g2">'+fi('lift',id,'weight','Working weight (kg)',l.weight,{min:0})
-      +fs('lift',id,'bar','Bar',l.bar,S.bars.map(function(b){return [b.id,esc(b.name)+' ('+fmt(b.weight)+')'];}))+'</div>';
-    h+='<div class="g2">'+fi('lift',id,'sets','Sets',l.sets,{int:1,min:1})
-      +(dbl?'<div><label>Reps now (auto)</label><input value="'+l.reps+'" disabled></div>':fi('lift',id,'reps','Reps',l.reps,{int:1,min:1}))+'</div>';
+    h+='<div class="g2">'+fi('lift',id,'weight',l.bar==='none'?'Added weight (kg, 0 = bodyweight)':'Working weight (kg)',l.weight,{min:0})
+      +fs('lift',id,'bar','Bar',l.bar,[['none','No bar (bodyweight / added weight)']].concat(S.bars.map(function(b){return [b.id,esc(b.name)+' ('+fmt(b.weight)+')'];})))+'</div>';
+    h+='<div class="g3">'+fs('lift',id,'scheme','Sets',l.scheme,[['straight','Straight sets'],['drop','Drop sets']])
+      +fi('lift',id,'sets','Working sets',l.sets,{int:1,min:1})
+      +(dbl?'<div><label>Reps now (auto)</label><input value="'+l.reps+'" disabled></div>':fi('lift',id,'reps',l.scheme==='drop'?'Top-set reps':'Reps',l.reps,{int:1,min:1}))+'</div>';
+    if(l.scheme==='drop'){
+      h+='<div class="g4">'+fi('lift',id,'drops.n','Drops per set',l.drops.n,{int:1,min:1})
+        +fi('lift',id,'drops.by','Drop by',l.drops.by,{min:0})
+        +fs('lift',id,'drops.unit','Unit',l.drops.unit,[['pct','%'],['kg','kg']])
+        +fi('lift',id,'drops.reps','Reps / drop',l.drops.reps,{int:1,min:1})+'</div>';
+    }
     h+='<h2 style="margin:16px 0 0">Progression</h2>';
     h+='<div class="g2">'+fs('lift',id,'prog','Type',l.prog,[['weight','Add weight each success'],['double','Add reps, then weight'],['none','None (I choose)']])
       +(l.prog==='none'?'<div></div>':fi('lift',id,'inc',dbl?'Add kg when reps maxed':'Add kg per success',l.inc,{min:0}))+'</div>';
@@ -382,7 +410,7 @@ function vGear(){
       +(S.bars.length>1?'<div class="chips"><span style="flex:1"></span><button class="sm danger ghost" data-act="delbar" data-id="'+esc(b.id)+'">Delete</button></div>':'')+'</div>';
   });
   h+='<button data-act="addbar" style="width:100%">+ Add a bar</button>';
-  h+='<h2>Plates</h2><div class="sub">Count is the total number of that plate you own. 2 = one pair. A spare odd plate is ignored.</div>';
+  h+='<h2>Plates</h2><div class="sub">Count is the total number of that plate you own. 2 = one pair. For bar lifts a spare odd plate is ignored. For lifts set to "No bar" (belt or vest), every plate counts on its own.</div>';
   S.plates.forEach(function(p,i){
     h+='<div class="card"><div class="g2" style="margin-top:0">'+fi('plate',i,'w','Plate (kg)',p.w,{min:0})+fi('plate',i,'n','How many',p.n,{int:1,min:0})+'</div>'
       +'<div class="chips"><span style="flex:1"></span><button class="sm danger ghost" data-act="delplate" data-i="'+i+'">Delete</button></div></div>';
@@ -394,6 +422,9 @@ function vGear(){
     for(var i=1;i<list.length;i++){var df=list[i].total-list[i-1].total;if(jump===null||df<jump)jump=df;}
     h+='<div style="padding:3px 0"><b>'+esc(b.name)+'</b><div class="sub">'+fmt(list[0].total)+' to '+fmt(list[list.length-1].total)+' kg'+(jump!==null?', smallest step '+fmt(jump)+' kg':'')+'</div></div>';
   });
+  var nl=loadMap(0,true),nj=null;
+  for(var q=1;q<nl.length;q++){var dq=nl[q].total-nl[q-1].total;if(nj===null||dq<nj)nj=dq;}
+  h+='<div style="padding:3px 0"><b>No bar (belt or vest)</b><div class="sub">Bodyweight up to +'+fmt(nl[nl.length-1].total)+' kg'+(nj!==null?', smallest step '+fmt(nj)+' kg':'')+'</div></div>';
   h+='</div><h2>Rest timer</h2><div class="card">'+fi('g','','rest','Seconds between sets',S.rest,{int:1,min:0})+'</div>';
   return h;
 }
